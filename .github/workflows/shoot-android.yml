@@ -67,6 +67,16 @@ jobs:
             --name shot \
             --package "system-images;android-$API;google_apis;$ABI" \
             --device pixel_6
+      # What an emulator is linked against and a machine of this kind may
+      # not have come with: without them it writes a complaint nobody reads
+      # and goes on its way, and there is nothing left for the step below
+      # to wait for.
+      - name: What the emulator needs of the machine
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libegl1 libnss3 libx11-xcb1 libxcb-dri3-0 \
+            libxcursor1 libxi6 libxtst6 libpulse0 || true
       # Started before the long build rather than after it: a picture of the
       # home screen says the emulator came up at all, and says it before
       # three quarters of an hour has been spent building into one that
@@ -75,21 +85,35 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+          "$ANDROID_HOME/emulator/emulator" -version | head -3 || true
           nohup "$ANDROID_HOME/emulator/emulator" @shot \
             -no-window -no-boot-anim -no-audio -no-snapshot -gpu swiftshader_indirect \
             -memory 4096 -cores 4 >emulator.txt 2>&1 &
-          adb wait-for-device
-          for at in $(seq 1 60); do
-            done=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-            [ "$done" = "1" ] && break
-            sleep 5
-          done
-          adb shell getprop sys.boot_completed
-          adb shell wm dismiss-keyguard
-          adb exec-out screencap -p > shot_home.png
-          adb shell getprop ro.build.version.release
-          adb shell wm size
-          adb shell wm density
+          # Nothing waits without an end: an adb asked of a device that is
+          # not up yet answers nothing at all and hangs on that until the
+          # whole run is out of time, so every asking is given how long it
+          # may take, and what could not be brought up says why rather than
+          # saying nothing.
+          timeout 60 adb wait-for-device || true
+          up() {
+            [ "$(timeout 15 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]
+          }
+          for at in $(seq 1 40); do up && break; sleep 5; done
+          if ! up; then
+            echo "== what the emulator wrote =="
+            tail -40 emulator.txt || true
+            echo "== what adb sees =="
+            timeout 20 adb devices -l || true
+            echo "== what the machine has for it =="
+            timeout 20 ls -l /dev/kvm || true
+            exit 1
+          fi
+          timeout 15 adb shell getprop ro.build.version.release
+          timeout 15 adb shell wm dismiss-keyguard || true
+          timeout 30 adb exec-out screencap -p > shot_home.png
+          timeout 15 adb shell wm size
+          timeout 15 adb shell wm density
+          ls -l shot_home.png
       - uses: actions/upload-artifact@v4
         with:
           name: shot-android-home
@@ -134,13 +158,13 @@ jobs:
           # Up still? A background process of a step that has ended is not
           # always one of the step after it, so it is asked again, and
           # brought up again where it is not.
-          up() { [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; }
+          up() { [ "$(timeout 15 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; }
           if ! up; then
             nohup "$ANDROID_HOME/emulator/emulator" @shot \
               -no-window -no-boot-anim -no-audio -no-snapshot -gpu swiftshader_indirect \
               -memory 4096 -cores 4 >>emulator.txt 2>&1 &
-            adb wait-for-device
-            for at in $(seq 1 60); do up && break; sleep 5; done
+            timeout 60 adb wait-for-device || true
+            for at in $(seq 1 40); do up && break; sleep 5; done
           fi
           up || { echo "the emulator never came up"; tail -40 emulator.txt; exit 1; }
           adb install -r build-android-shot/progressive-chat-*-${{ env.ABI }}.apk
