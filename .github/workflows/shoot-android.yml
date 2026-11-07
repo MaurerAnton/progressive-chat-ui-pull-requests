@@ -63,10 +63,21 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          mkdir -p "$ANDROID_AVD_HOME"
           echo no | avdmanager create avd --force \
             --name shot \
             --package "system-images;android-$API;google_apis;$ABI" \
             --device pixel_6
+          # Where it wrote it is for it to know and for the emulator below
+          # to agree on: rather than guess which of the homes it answered
+          # to, what it wrote is found wherever it wrote it, and that place
+          # is what the emulator is then told to look in.
+          found=$(find "$HOME" "$ANDROID_AVD_HOME" -maxdepth 6 -name shot.ini -print -quit)
+          echo "== what avdmanager wrote =="
+          echo "$found"
+          avd_home=$(dirname "$found")
+          echo "ANDROID_AVD_HOME=$avd_home" >> "$GITHUB_ENV"
+          ls -l "$avd_home"
       # What an emulator is linked against and a machine of this kind may
       # not have come with: without them it writes a complaint nobody reads
       # and goes on its way, and there is nothing left for the step below
