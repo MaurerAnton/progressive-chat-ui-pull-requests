@@ -119,24 +119,41 @@ jobs:
             timeout 20 ls -l /dev/kvm || true
             exit 1
           fi
+          # A device that has come up is not one whose screen is lit: slept
+          # through, every picture of it is one colour, however long it has
+          # been awake. So it is woken, the lock let go, and a picture is
+          # read of it once more than once.
+          timeout 15 adb shell svc power stayon true || true
+          timeout 15 adb shell input keyevent 224 || true
+          timeout 15 adb shell input keyevent 82 || true
+          sleep 5
           timeout 15 adb shell getprop ro.build.version.release
           timeout 15 adb shell wm dismiss-keyguard || true
           timeout 30 adb exec-out screencap -p > shot_home.png
+          sleep 5
+          timeout 30 adb exec-out screencap -p > shot_home_2.png
           timeout 15 adb shell wm size
           timeout 15 adb shell wm density
-          ls -l shot_home.png
+          ls -l shot_home.png shot_home_2.png
       - uses: actions/upload-artifact@v4
         with:
           name: shot-android-home
-          path: shot_home.png
+          path: |
+            shot_home.png
+            shot_home_2.png
           if-no-files-found: error
       - uses: ./.github/actions/android-setup
         with:
           abi: ${{ env.ABI }}
       - uses: actions/cache@v4
+        # What this file itself says is not in the key it is read by: only
+        # what the program is made of, and the toolchain made to build it,
+        # say whether the build kept is the build wanted. A key made of the
+        # words above too would throw out three quarters of an hour of a
+        # build for every word of them changed.
         with:
           path: build-android-shot
-          key: shoot-android-${{ env.ABI }}-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake', '.github/workflows/shoot-android.yml', '.github/actions/android-setup/action.yml') }}
+          key: shoot-android-${{ env.ABI }}-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake', 'src/**', 'android/**', 'ports/**', '.github/actions/android-setup/action.yml') }}
       - name: Configure
         run: |
           cmake -S . -B build-android-shot -G Ninja \
@@ -178,13 +195,16 @@ jobs:
             for at in $(seq 1 40); do up && break; sleep 5; done
           fi
           up || { echo "the emulator never came up"; tail -40 emulator.txt; exit 1; }
-          adb install -r build-android-shot/progressive-chat-*-${{ env.ABI }}.apk
-          adb shell am start -n chat.progressive.client/org.libsdl.nativeapp.NativeActivity
+          timeout 15 adb shell svc power stayon true || true
+          timeout 15 adb shell input keyevent 224 || true
+          timeout 15 adb shell input keyevent 82 || true
+          timeout 60 adb install -r build-android-shot/progressive-chat-*-${{ env.ABI }}.apk
+          timeout 30 adb shell am start -n chat.progressive.client/org.libsdl.nativeapp.NativeActivity
           for at in 1 2 3 4 5 6; do
             sleep 5
-            adb exec-out screencap -p > "shot_${at}.png"
+            timeout 30 adb exec-out screencap -p > "shot_${at}.png"
           done
-          adb logcat -d > android.txt
+          timeout 30 adb logcat -d > android.txt
           tail -40 android.txt || true
           ls -l shot_*.png
       - uses: actions/upload-artifact@v4
