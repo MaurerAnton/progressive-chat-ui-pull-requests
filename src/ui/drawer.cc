@@ -77,11 +77,12 @@ struct ask_row : scene::Node {
                  .x = with_mark ? drawer_margin + drawer_mark + gap
                                 : drawer_margin});
     this->apply(made);
-    // Kept off the panel's edge on either side, as the room a row is given
-    // is reckoned (`row_room` below takes the inset twice): what its x gives
-    // it on the left, its margin gives it on the right, where the panel ends
-    // and the row would otherwise run out over it.
-    this->apply({.margin = scene::Margin{0.0f, edge, 0.0f, 0.0f}});
+    // Kept off the panel's edge on either side, as the room a row is given is
+    // reckoned (`row_room` below takes the inset twice). A margin holds the
+    // row off the edge it is anchored to, which is how its width is reckoned
+    // too: it is the room left inside them that it fills, and nothing else is
+    // asked of its x.
+    this->apply({.margin = scene::Margin{0.0f, edge, 0.0f, edge}});
   }
 
   [[nodiscard]] bool acceptsInput() const { return true; }
@@ -130,9 +131,9 @@ struct conversation_row : scene::Node {
 
   conversation_row() {
     this->apply({.fillX = true, .height = row_height, .cornerRadius = 16.0f});
-    // Inset from the panel's edge on the right as it is on the left: see the
-    // same margin on ask_row.
-    this->apply({.margin = scene::Margin{0.0f, edge, 0.0f, 0.0f}});
+    // Held off the panel's edge on either side: see the same margin on
+    // ask_row.
+    this->apply({.margin = scene::Margin{0.0f, edge, 0.0f, edge}});
     // One line each, cut where the row ends: a name that wraps stood its
     // second line over what was said last, and what was said last over the
     // row after it.
@@ -254,7 +255,6 @@ struct drawer_screen : scene::Node {
   // through. Neither stands behind anything in the program yet.
   ask_row fTasks{shape::done(), "Tasks", app::open_tasks{},
                  {.anchor = scene::anchor::kTopLeft,
-                  .x = edge,
                   .fillX = true,
                   .height = drawer_row_height,
                   .corners = scene::Corners{.topLeft = drawer_row_radius,
@@ -263,7 +263,6 @@ struct drawer_screen : scene::Node {
                                             .bottomLeft = drawer_row_corner}}};
   ask_row fRemote{shape::system_prompt(), "Remote", app::open_remote{},
                   {.anchor = scene::anchor::kTopLeft,
-                   .x = edge,
                    .fillX = true,
                    .height = drawer_row_height,
                    .corners = scene::Corners{.topLeft = drawer_row_corner,
@@ -275,14 +274,12 @@ struct drawer_screen : scene::Node {
   // the page over the room.
   ask_row fNewChat{shape::done(), "+ New Chat", app::new_chat{},
                    {.anchor = scene::anchor::kTopLeft,
-                    .x = edge,
                     .fillX = true,
                     .height = drawer_row_height,
                     .cornerRadius = drawer_row_height / 2.0f},
                    false};
   ask_row fSettings{shape::gear(), "Settings", app::open_settings{},
                     {.anchor = scene::anchor::kTopLeft,
-                     .x = edge,
                      .fillX = true,
                      .height = drawer_row_height,
                      .cornerRadius = drawer_row_height / 2.0f}};
@@ -301,7 +298,6 @@ struct drawer_screen : scene::Node {
       fRows.push_back(std::make_unique<conversation_row>());
     conversation_row &row = *fRows[place];
     row.apply({.anchor = scene::anchor::kTopLeft,
-               .x = edge,
                .y = rows_top + static_cast<float>(place) * (row_height + 4.0f)});
     // How far the name and what was said reach: the room the row was given,
     // less the circle's and less what the time and the badge keep at its end
@@ -325,11 +321,10 @@ struct drawer_screen : scene::Node {
     // The field, its magnifier standing in it before what it says.
     const float search_y = drawer_margin + 34.0f;
     fSearch.apply({.anchor = scene::anchor::kTopLeft,
-                   .x = edge,
                    .y = search_y,
                    .fillX = true,
                    .height = 40.0f,
-                   .margin = scene::Margin{0.0f, edge, 0.0f, 0.0f},
+                   .margin = scene::Margin{0.0f, edge, 0.0f, edge},
                    .cornerRadius = 20.0f,
                    .padding = scene::SpecMargin(
                        0.0f, drawer_margin, 0.0f,
@@ -346,10 +341,9 @@ struct drawer_screen : scene::Node {
     const float remote_y = tasks_y + drawer_row_height + drawer_row_gap;
     const float new_y = remote_y + drawer_row_height + gap;
     rows_top = new_y + drawer_row_height + gap;
-    fTasks.apply({.anchor = scene::anchor::kTopLeft, .x = edge, .y = tasks_y});
-    fRemote.apply(
-        {.anchor = scene::anchor::kTopLeft, .x = edge, .y = remote_y});
-    fNewChat.apply({.anchor = scene::anchor::kTopLeft, .x = edge, .y = new_y});
+    fTasks.apply({.anchor = scene::anchor::kTopLeft, .y = tasks_y});
+    fRemote.apply({.anchor = scene::anchor::kTopLeft, .y = remote_y});
+    fNewChat.apply({.anchor = scene::anchor::kTopLeft, .y = new_y});
     fNone.apply({.anchor = scene::anchor::kTopLeft,
                  .x = drawer_margin,
                  .y = rows_top});
@@ -415,7 +409,6 @@ struct drawer_screen : scene::Node {
     // At the foot of them, whatever the list came to, the row the settings
     // are opened from.
     fSettings.apply({.anchor = scene::anchor::kTopLeft,
-                     .x = edge,
                      .y = rows_top + static_cast<float>(rows.size()) *
                                          (row_height + 4.0f)});
     if (!fRows.empty()) {
@@ -423,7 +416,6 @@ struct drawer_screen : scene::Node {
       const skia::SkRect title = first.fTitle.bounds();
       const skia::SkRect said = first.fSaid.bounds();
       fSaidDebug.apply({.anchor = scene::anchor::kTopLeft,
-                        .x = edge,
                         .y = this->bounds().height() - 60.0f,
                         .maxWidth = 0.0f});
       fSaidDebug.setText(std::format(
