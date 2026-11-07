@@ -77,6 +77,11 @@ struct ask_row : scene::Node {
                  .x = with_mark ? drawer_margin + drawer_mark + gap
                                 : drawer_margin});
     this->apply(made);
+    // Kept off the panel's edge on either side, as the room a row is given
+    // is reckoned (`row_room` below takes the inset twice): what its x gives
+    // it on the left, its margin gives it on the right, where the panel ends
+    // and the row would otherwise run out over it.
+    this->apply({.margin = scene::Margin{0.0f, edge, 0.0f, 0.0f}});
   }
 
   [[nodiscard]] bool acceptsInput() const { return true; }
@@ -125,6 +130,9 @@ struct conversation_row : scene::Node {
 
   conversation_row() {
     this->apply({.fillX = true, .height = row_height, .cornerRadius = 16.0f});
+    // Inset from the panel's edge on the right as it is on the left: see the
+    // same margin on ask_row.
+    this->apply({.margin = scene::Margin{0.0f, edge, 0.0f, 0.0f}});
     // One line each, cut where the row ends: a name that wraps stood its
     // second line over what was said last, and what was said last over the
     // row after it.
@@ -321,6 +329,7 @@ struct drawer_screen : scene::Node {
                    .y = search_y,
                    .fillX = true,
                    .height = 40.0f,
+                   .margin = scene::Margin{0.0f, edge, 0.0f, 0.0f},
                    .cornerRadius = 20.0f,
                    .padding = scene::SpecMargin(
                        0.0f, drawer_margin, 0.0f,
