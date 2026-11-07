@@ -5,60 +5,85 @@ name: shoot android
 # with no GPU at all draws, at this screen's own density, on this machine's
 # own fonts. Whether a corner comes out round is one thing everywhere; how
 # it reads to an eye on a phone is another, and only a frame an Android
-# itself drew says that. So the program is built for the emulator's own ABI,
-# put in it, started in it, and shot there.
+# itself drew says that.
+#
+# Asked of this machine rather than the Linux one, though it costs more of
+# an hour: an Android run on Linux is run on x86, and the program cannot be
+# built for x86 -- the toolchain in .github/actions/android-setup is 64-bit
+# ARM in every sysroot it makes (tools/manifest_abi.py says otherwise only
+# for 32-bit ARM), so what it builds is an ARM program, and no emulator of
+# x86 asked for such a one takes it. This machine is ARM itself, so what is
+# already built for ARM is what is put in it -- the last APK the android
+# line made, which is asked for here and not built again.
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   shot:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 350
+    runs-on: macos-14
+    timeout-minutes: 60
     env:
       ANDROID_HOME: ${{ github.workspace }}/.android-home
       ANDROID_SDK_ROOT: ${{ github.workspace }}/.android-home
       ANDROID_AVD_HOME: ${{ github.workspace }}/.android-avd
-      ABI: x86_64
+      ABI: arm64-v8a
       API: '34'
     steps:
       - uses: actions/checkout@v5
-      - uses: ./.github/actions/desktop-setup
-      # Hardware acceleration: the emulator is given /dev/kvm and the user
-      # is let at it, which is what GitHub asks be done by hand -- without
-      # it an x86 guest is translated instruction by instruction, and boots
-      # for longer than a run is given.
-      - name: Let the runner at kvm
+      # No `timeout` on this machine: there is nothing here that comes with
+      # one, so what would hang is given its end in the shell's own words
+      # instead -- and written down once for every step after this one,
+      # since what one step writes another may read.
+      - name: An end for every asking of the device
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          ls -l /dev/kvm
-      # Android's own tools, and one image of one release run in them. Say
-      # "yes" to every licence asked for rather than standing on one.
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP"
+          cat > "$RUNNER_TEMP/with_end.sh" <<'END'
+          # Runs what it is given, and kills it after so many seconds: an
+          # adb asked of a device that is not up yet answers nothing and
+          # hangs on that until the whole run is out of time.
+          at() {
+            seconds=$1
+            shift
+            "$@" &
+            asked=$!
+            ( sleep "$seconds"; kill -9 "$asked" 2>/dev/null ) &
+            ended=$!
+            wait "$asked" 2>/dev/null
+            said=$?
+            kill -9 "$ended" 2>/dev/null
+            return $said
+          }
+          up() { [ "$(at 15 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; }
+          END
+          cat "$RUNNER_TEMP/with_end.sh"
+      # Android's own tools, and one image of one release to run in them.
+      # Say yes to every licence asked for: `yes` writing into a closed
+      # pipe is a death by signal, and what reads a pipeline in this shell
+      # reads that as an answer of its own -- so its end is forgiven, and
+      # only what sdkmanager said is what this step comes to.
       - name: Android's own tools
         run: |
           set -euo pipefail
           mkdir -p "$ANDROID_HOME/cmdline-tools"
-          tools=commandlinetools-linux-13114758_latest.zip
+          tools=commandlinetools-mac-13114758_latest.zip
           curl -sSfLo cmdline.zip "https://dl.google.com/android/repository/$tools"
           unzip -q cmdline.zip -d "$ANDROID_HOME/cmdline-tools"
           mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
-          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
-          # Say yes to every licence asked for: `yes` writing into a closed
-          # pipe is a death by signal, and `set -o pipefail` reads that as
-          # an answer of its own -- so its end is forgiven here, and only
-          # what sdkmanager said is what this step comes to.
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
           { yes || true; } | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager --install \
             "platform-tools" "emulator" "platforms;android-$API" \
             "build-tools;$API.0.0" "system-images;android-$API;google_apis;$ABI"
           sdkmanager --list_installed
-      # A device of its own kind in front of the emulator: a phone's screen,
-      # so what is drawn is drawn narrow as it is on a phone.
+      # A device of its own kind to be this one: a phone's screen, so what
+      # is drawn is drawn narrow as it is on a phone. Where avdmanager put
+      # it is for it to know, so what it wrote is found wherever that is
+      # and the emulator is told to look there.
       - name: A device to be this one
         run: |
           set -euo pipefail
@@ -68,72 +93,46 @@ jobs:
             --name shot \
             --package "system-images;android-$API;google_apis;$ABI" \
             --device pixel_6
-          # Where it wrote it is for it to know and for the emulator below
-          # to agree on: rather than guess which of the homes it answered
-          # to, what it wrote is found wherever it wrote it, and that place
-          # is what the emulator is then told to look in.
           found=$(find "$HOME" "$ANDROID_AVD_HOME" -maxdepth 6 -name shot.ini -print -quit)
           echo "== what avdmanager wrote =="
           echo "$found"
           avd_home=$(dirname "$found")
           echo "ANDROID_AVD_HOME=$avd_home" >> "$GITHUB_ENV"
           ls -l "$avd_home"
-      # What an emulator is linked against and a machine of this kind may
-      # not have come with: without them it writes a complaint nobody reads
-      # and goes on its way, and there is nothing left for the step below
-      # to wait for.
-      - name: What the emulator needs of the machine
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends \
-            libgl1 libegl1 libnss3 libx11-xcb1 libxcb-dri3-0 \
-            libxcursor1 libxi6 libxtst6 libpulse0 || true
-      # Started before the long build rather than after it: a picture of the
-      # home screen says the emulator came up at all, and says it before
-      # three quarters of an hour has been spent building into one that
-      # has not.
+      # Started before anything is put in it: a picture of its home screen
+      # says it came up at all.
       - name: Bring it up
         run: |
           set -euo pipefail
+          . "$RUNNER_TEMP/with_end.sh"
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
           "$ANDROID_HOME/emulator/emulator" -version | head -3 || true
           nohup "$ANDROID_HOME/emulator/emulator" @shot \
             -no-window -no-boot-anim -no-audio -no-snapshot -gpu swiftshader_indirect \
-            -memory 4096 -cores 4 >emulator.txt 2>&1 &
-          # Nothing waits without an end: an adb asked of a device that is
-          # not up yet answers nothing at all and hangs on that until the
-          # whole run is out of time, so every asking is given how long it
-          # may take, and what could not be brought up says why rather than
-          # saying nothing.
-          timeout 60 adb wait-for-device || true
-          up() {
-            [ "$(timeout 15 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]
-          }
-          for at in $(seq 1 40); do up && break; sleep 5; done
+            >emulator.txt 2>&1 &
+          at 60 adb wait-for-device || true
+          for once in $(seq 1 40); do up && break; sleep 5; done
           if ! up; then
             echo "== what the emulator wrote =="
             tail -40 emulator.txt || true
             echo "== what adb sees =="
-            timeout 20 adb devices -l || true
-            echo "== what the machine has for it =="
-            timeout 20 ls -l /dev/kvm || true
+            at 20 adb devices -l || true
             exit 1
           fi
           # A device that has come up is not one whose screen is lit: slept
           # through, every picture of it is one colour, however long it has
-          # been awake. So it is woken, the lock let go, and a picture is
-          # read of it once more than once.
-          timeout 15 adb shell svc power stayon true || true
-          timeout 15 adb shell input keyevent 224 || true
-          timeout 15 adb shell input keyevent 82 || true
+          # been awake. So it is woken and its lock let go.
+          at 15 adb shell getprop ro.build.version.release
+          at 15 adb shell svc power stayon true || true
+          at 15 adb shell input keyevent 224 || true
+          at 15 adb shell input keyevent 82 || true
           sleep 5
-          timeout 15 adb shell getprop ro.build.version.release
-          timeout 15 adb shell wm dismiss-keyguard || true
-          timeout 30 adb exec-out screencap -p > shot_home.png
+          at 15 adb shell wm dismiss-keyguard || true
+          at 30 adb exec-out screencap -p > shot_home.png
           sleep 5
-          timeout 30 adb exec-out screencap -p > shot_home_2.png
-          timeout 15 adb shell wm size
-          timeout 15 adb shell wm density
+          at 30 adb exec-out screencap -p > shot_home_2.png
+          at 15 adb shell wm size
+          at 15 adb shell wm density
           ls -l shot_home.png shot_home_2.png
       - uses: actions/upload-artifact@v4
         with:
@@ -142,70 +141,53 @@ jobs:
             shot_home.png
             shot_home_2.png
           if-no-files-found: error
-      - uses: ./.github/actions/android-setup
-        with:
-          abi: ${{ env.ABI }}
-      - uses: actions/cache@v4
-        # What this file itself says is not in the key it is read by: only
-        # what the program is made of, and the toolchain made to build it,
-        # say whether the build kept is the build wanted. A key made of the
-        # words above too would throw out three quarters of an hour of a
-        # build for every word of them changed.
-        with:
-          path: build-android-shot
-          key: shoot-android-${{ env.ABI }}-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake', 'src/**', 'android/**', 'ports/**', '.github/actions/android-setup/action.yml') }}
-      - name: Configure
+      # What was built for this machine's own kind already, by the line
+      # that builds it: which commit it is of is said here, so that what
+      # is shot is never a build whose name nobody read.
+      - name: The last APK made
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          cmake -S . -B build-android-shot -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_FLAGS_DEBUG='-O3 -g0' \
-            -DCMAKE_C_FLAGS_DEBUG='-O3 -g0' \
-            -DCMAKE_TOOLCHAIN_FILE="$HOME/.cache/pchat-android-${{ env.ABI }}/cmake/target.cmake" \
-            -DANDROID_ABI=${{ env.ABI }} \
-            -DANDROID_PLATFORM=android-28 \
-            -DPCHAT_ANDROID_SDL_DEX_DIR="$HOME/pchat-tools/sdl-dex/build-scripts/native-activity/dex" \
-            -DPCHAT_REVISION="$(git rev-parse --short=12 HEAD)" \
-            -DPCHAT_TESTS=OFF
-      - name: Nothing packaged before
-        run: |
-          rm -f build-android-shot/progressive-chat-*-${{ env.ABI }}.apk \
-                build-android-shot/progressive-chat-*-${{ env.ABI }}-unsigned.apk
-      - name: Build and package
-        run: |
-          cmake --build build-android-shot --target progressive-chat -- -k 0
-          cmake --build build-android-shot --target progressive-chat-apk-out
-          ls -l build-android-shot/*.apk
-      # Put in the device already up, started in it, and shot again and
-      # again on the way: what the first frame draws may not be what the
-      # tenth does, and a program that went has still said something in
-      # logcat about where it went.
+          set -euo pipefail
+          run=$(gh run list --workflow android.yml --branch main --status success \
+                  --limit 1 --json databaseId,headSha,displayTitle -q '.[0]')
+          echo "the android line says: $run"
+          id=$(echo "$run" | python3 -c 'import json,sys; print(json.load(sys.stdin)["databaseId"])')
+          sha=$(echo "$run" | python3 -c 'import json,sys; print(json.load(sys.stdin)["headSha"])')
+          echo "APK of $sha"
+          echo "this run is of $(git rev-parse HEAD)"
+          gh run download "$id" --dir apk
+          find apk -name '*.apk' -print
+          cp "$(find apk -name '*arm64-v8a*.apk' -print -quit)" progressive-chat.apk
+          ls -l progressive-chat.apk
+      # Put in it, started in it, and shot again and again on the way: what
+      # the first frame draws may not be what the tenth does, and a program
+      # that went has still said something in logcat about where it went.
       - name: Put it in and shoot what it drew
         run: |
           set -euo pipefail
+          . "$RUNNER_TEMP/with_end.sh"
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
-          # Up still? A background process of a step that has ended is not
-          # always one of the step after it, so it is asked again, and
-          # brought up again where it is not.
-          up() { [ "$(timeout 15 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; }
           if ! up; then
             nohup "$ANDROID_HOME/emulator/emulator" @shot \
               -no-window -no-boot-anim -no-audio -no-snapshot -gpu swiftshader_indirect \
-              -memory 4096 -cores 4 >>emulator.txt 2>&1 &
-            timeout 60 adb wait-for-device || true
-            for at in $(seq 1 40); do up && break; sleep 5; done
+              >>emulator.txt 2>&1 &
+            at 60 adb wait-for-device || true
+            for once in $(seq 1 40); do up && break; sleep 5; done
           fi
           up || { echo "the emulator never came up"; tail -40 emulator.txt; exit 1; }
-          timeout 15 adb shell svc power stayon true || true
-          timeout 15 adb shell input keyevent 224 || true
-          timeout 15 adb shell input keyevent 82 || true
-          timeout 60 adb install -r build-android-shot/progressive-chat-*-${{ env.ABI }}.apk
-          timeout 30 adb shell am start -n chat.progressive.client/org.libsdl.nativeapp.NativeActivity
-          for at in 1 2 3 4 5 6; do
+          at 15 adb shell svc power stayon true || true
+          at 15 adb shell input keyevent 224 || true
+          at 15 adb shell input keyevent 82 || true
+          at 90 adb install -r progressive-chat.apk
+          at 30 adb shell am start -n chat.progressive.client/org.libsdl.nativeapp.NativeActivity
+          for once in 1 2 3 4 5 6 7 8; do
             sleep 5
-            timeout 30 adb exec-out screencap -p > "shot_${at}.png"
+            at 30 adb exec-out screencap -p > "shot_${once}.png"
           done
-          timeout 30 adb logcat -d > android.txt
-          tail -40 android.txt || true
+          at 30 adb logcat -d > android.txt
+          tail -60 android.txt || true
           ls -l shot_*.png
       - uses: actions/upload-artifact@v4
         if: always()
